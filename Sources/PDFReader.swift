@@ -5,11 +5,9 @@ final class FolioPDFView: PDFView {
     var picked: ((String) -> Void)?
     private var clickMonitor: Any?
     private var clickStart: (id: String, point: CGPoint)?
-    private weak var filteredDocument: NSView?
     private var appliedNight: Bool?
     func applyPageAppearance(night: Bool) {
-        guard let surface = documentView, surface !== filteredDocument || appliedNight != night else { return }
-        filteredDocument = surface
+        guard appliedNight != night else { return }
         appliedNight = night
         if night, let filter = CIFilter(name: "CIColorMatrix") {
             // Reverse the brightness of the page while retaining the hue of ink and highlights.
@@ -18,20 +16,26 @@ final class FolioPDFView: PDFView {
             filter.setValue(CIVector(x: other, y: diagonal, z: other, w: 0), forKey: "inputGVector")
             filter.setValue(CIVector(x: other, y: other, z: diagonal, w: 0), forKey: "inputBVector")
             filter.setValue(CIVector(x: 0.88, y: 0.88, z: 0.88, w: 0), forKey: "inputBiasVector")
-            surface.wantsLayer = true
-            surface.layer?.rasterizationScale = window?.backingScaleFactor ?? 2
+            // Apply color conversion to the fixed viewport, after PDFKit has drawn
+            // its tiles at the current zoom. A filter on documentView scales a cached image.
+            wantsLayer = true
+            layer?.rasterizationScale = window?.backingScaleFactor ?? 2
+            backgroundColor = .white
             if let tone = CIFilter(name: "CIColorPolynomial") {
                 let curve = CIVector(x: 0.009, y: 0.02, z: 0.21, w: 0.80)
                 for channel in ["inputRedCoefficients", "inputGreenCoefficients", "inputBlueCoefficients"] {
                     tone.setValue(curve, forKey: channel)
                 }
-                surface.contentFilters = [filter, tone]
-            } else { surface.contentFilters = [filter] }
-        } else { surface.contentFilters = [] }
+                contentFilters = [filter, tone]
+            } else { contentFilters = [filter] }
+        } else {
+            contentFilters = []
+            backgroundColor = C.canvas
+        }
     }
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        if appliedNight == true { filteredDocument?.layer?.rasterizationScale = window?.backingScaleFactor ?? 2 }
+        if appliedNight == true { layer?.rasterizationScale = window?.backingScaleFactor ?? 2 }
     }
     var pickingRegion = false
     var fitWidth = true
