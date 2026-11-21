@@ -57,8 +57,8 @@ struct Shell: View {
             switch sheet {
             case .guide: Guide(m: m)
             case .importNotes: ImportNotes(m: m)
-            case .manual(let paperID, let note, let isNew):
-                ManualNoteEditor(m: m, paperID: paperID, isNew: isNew, draft: note)
+            case .editor(let paperID, let note, let isNew):
+                NoteEditor(m: m, paperID: paperID, isNew: isNew, original: note)
             }
         }
         .alert("操作未完成", isPresented: Binding(get: { m.error != nil }, set: { if !$0 { m.error = nil } })) {
@@ -262,7 +262,7 @@ private struct MarginNote: View {
                     HStack(spacing: 6) {
                         Rectangle().fill(color).frame(width: 13, height: 4)
                         Text(note.kind.label)
-                        if note.isManual { Text("· 手动") }
+                        Text(note.isManual ? "· 手动" : "· AI")
                         Spacer()
                         if active { Image(systemName: "arrow.up.left").font(.system(size: 10)) }
                     }.font(.system(size: 10, weight: .medium)).foregroundStyle(C.gray)
@@ -276,9 +276,8 @@ private struct MarginNote: View {
                 if !MathMarkup.parts(in: note.quote).isEmpty { MathPassage(text: note.quote, size: 15, quote: true) }
                 if !note.translation.isEmpty { passage("译文", note.translation) }
                 if !note.note.isEmpty { passage("注解", note.note) }
-                if note.isManual {
-                    Button("编辑批注") { m.editManualNote(note) }.buttonStyle(.link).font(.caption)
-                }
+                Button(note.isManual ? "编辑手动批注" : "编辑 AI 批注") { m.editNote(note) }
+                    .buttonStyle(.link).font(.caption)
             } else if !note.commentary.isEmpty {
                 Button { m.focus(note.id) } label: {
                     Text(note.translation.isEmpty ? note.note : note.translation).font(.system(size: 12))
@@ -294,7 +293,8 @@ private struct MarginNote: View {
             .background(active ? color.opacity(0.09) : .clear)
             .overlay(alignment: .leading) { if active { Rectangle().fill(color).frame(width: 3) } }
             .contextMenu {
-                if note.isManual { Button("编辑手动批注…") { m.editManualNote(note) }; Divider() }
+                Button(note.isManual ? "编辑手动批注…" : "编辑 AI 批注…") { m.editNote(note) }
+                Divider()
                 Button("复制原文") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(note.quote, forType: .string) }
                 Button("复制译文和注解") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(note.commentary, forType: .string) }.disabled(note.commentary.isEmpty)
             }

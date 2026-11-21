@@ -72,6 +72,8 @@ private struct DocumentActions: View {
                     Button("导出批注 JSON…") { m.exportNotes(false) }
                     Button("导出带高光的 PDF…") { m.exportNotes(true) }.disabled(m.locating || m.document == nil)
                     Divider()
+                    Button("清除本篇 AI 批注…") { m.confirmClearAINotes(in: paper) }
+                        .disabled(!paper.notes.contains { !$0.isManual })
                     Button("从文献库移除…") { m.remove(paper) }
                 } label: { Image(systemName: "ellipsis.circle").frame(width: 20) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("更多文献操作").accessibilityLabel("更多文献操作")

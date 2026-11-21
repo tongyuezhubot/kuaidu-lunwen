@@ -15,12 +15,12 @@ enum ReadingAppearance: String, CaseIterable {
 enum Surface { case reader, all, starred }
 enum RegionTarget: Equatable { case existing(String), new }
 enum Sheet: Identifiable {
-    case guide, importNotes, manual(paperID: String, note: Note, isNew: Bool)
+    case guide, importNotes, editor(paperID: String, note: Note, isNew: Bool)
     var id: String {
         switch self {
         case .guide: return "guide"
         case .importNotes: return "import"
-        case .manual(_, let note, _): return "manual-" + note.id
+        case .editor(let paperID, let note, _): return paperID + "/" + note.id
         }
     }
 }
@@ -88,6 +88,7 @@ extension Kind {
     @Published var showNotes = true
     @Published var showSidebar = true
     weak var viewer: FolioPDFView?
+    private var highlights: [String: [PDFAnnotation]] = [:]
     private var worker: Task<[String: Anchor], Never>?
     private var generation = UUID()
     private var toastTask: Task<Void,Never>?
@@ -114,21 +115,28 @@ extension Kind {
     }
     func loadReader() {
         worker?.cancel(); generation = UUID()
-        selectingRegion = nil; anchors = [:]; selected = nil; page = 1; filter = .all; locating = false
+        highlights.removeAll(); selectingRegion = nil; anchors = [:]; selected = nil; page = 1; filter = .all; locating = false
         guard let p = target else { document = nil; return }
         let url = library.url(p.id)
         guard let doc = PDFDocument(url: url) else {
             document = nil; error = "无法读取文献库中的 PDF 副本。可以重新导入原文件来恢复阅读。"; return
         }
         document = doc; selected = p.notes.first?.id
-        guard !p.notes.isEmpty else { return }
-        locating = true
+        locatePendingNotes(in: doc, paper: p)
+    }
+
+    private func locatePendingNotes(in doc: PDFDocument, paper: Paper) {
+        worker?.cancel(); generation = UUID()
+        let pending = paper.notes.filter { anchors[$0.id] == nil }
+        locating = !pending.isEmpty
+        guard locating else { return }
+        let url = library.url(paper.id)
         let ticket = generation
         let task = Task.detached(priority: .userInitiated) { () -> [String: Anchor] in
             guard let copy = PDFDocument(url: url) else { return [:] }
             let index = AnchorIndex(copy)
             var locations: [String: Anchor] = [:]
-            for n in p.notes {
+            for n in pending {
                 if Task.isCancelled { break }
                 locations[n.id] = index.find(n)
             }
@@ -141,7 +149,7 @@ extension Kind {
             // A reader may add, edit or delete a note while the original batch is locating.
             let currentNotes = Dictionary(uniqueKeysWithValues: (self.target?.notes ?? []).map { ($0.id, $0) })
             var installed = self.anchors
-            for n in p.notes where currentNotes[n.id] == n && installed[n.id] == nil {
+            for n in pending where currentNotes[n.id] == n && installed[n.id] == nil {
                 installed[n.id] = self.drawHighlight(n, anchor: result[n.id] ?? .missing, in: doc)
             }
             self.anchors = installed; self.locating = false
@@ -166,6 +174,7 @@ extension Kind {
             mark.userName = "快读论文"
             mark.setValue(note.id, forAnnotationKey: PDFAnnotationKey(rawValue: "/JianduID"))
             page.addAnnotation(mark)
+            highlights[note.id, default: []].append(mark)
         }
         viewer?.annotationsChanged(on: page)
         return anchor
@@ -175,42 +184,99 @@ extension Kind {
         guard surface == .reader, sheet == nil, let id = current, let doc = document else { return }
         do {
             let note = try Note.fromSelection(viewer?.currentSelection, in: doc)
-            sheet = .manual(paperID: id, note: note, isNew: true)
+            sheet = .editor(paperID: id, note: note, isNew: true)
         } catch { self.error = error.localizedDescription }
     }
 
-    func editManualNote(_ note: Note) {
-        guard note.isManual, let current else { return }
-        sheet = .manual(paperID: current, note: note, isNew: false)
+    func editNote(_ note: Note) {
+        guard let paper = target, paper.notes.contains(note) else { return }
+        sheet = .editor(paperID: paper.id, note: note, isNew: false)
     }
 
-    private func removeHighlight(_ id: String, in doc: PDFDocument) {
-        guard let n = anchors[id]?.pageNumber, let page = doc.page(at: n-1) else { return }
-        for mark in page.annotations where mark.value(forAnnotationKey: PDFAnnotationKey(rawValue:"/JianduID")) as? String == id {
-            page.removeAnnotation(mark)
+    private func removeHighlights(for ids: Set<String>) {
+        var pages = Set<PDFPage>()
+        for id in ids {
+            for mark in highlights.removeValue(forKey: id) ?? [] {
+                guard let page = mark.page else { continue }
+                page.removeAnnotation(mark)
+                pages.insert(page)
+            }
+            anchors.removeValue(forKey: id)
         }
-        viewer?.annotationsChanged(on: page)
+        for page in pages { viewer?.annotationsChanged(on: page) }
     }
 
-    func saveManualNote(_ note: Note, to paperID: String) throws {
-        guard current == paperID, note.isManual, let doc = document else { throw Problem("原文献已经关闭，请重新打开后保存。") }
-        let anchor = anchors[note.id] ?? AnchorIndex(doc).find(note)
-        try library.merge([note], into: paperID)
-        removeHighlight(note.id, in: doc)
-        anchors[note.id] = drawHighlight(note, anchor: anchor, in: doc)
+    func saveNote(_ draft: Note, replacing original: Note?, in paperID: String) throws {
+        guard current == paperID, let paper = target, let doc = document else { throw Problem("原文献已经关闭，请重新打开后保存。") }
+        let existing = paper.notes.firstIndex { $0.id == draft.id }
+        guard existing.map({ paper.notes[$0] }) == original,
+              original.map({ $0.source == draft.source }) ?? draft.isManual else {
+            throw Problem("这条批注已被修改或删除，请关闭编辑窗口后重新打开。")
+        }
+        var note = draft
+        note.quote = draft.quote.trimmed; note.translation = draft.translation.trimmed; note.note = draft.note.trimmed
+        guard !note.quote.isEmpty else { throw Problem("请填写要定位的引文。") }
+        guard note.isManual || (!note.translation.isEmpty && !note.note.isEmpty) else { throw Problem("请填写 AI 批注的译文和注解。") }
+        if note.hasUnexpectedControlCharacters { throw Problem("批注含有异常控制字符，请检查粘贴的文字或公式。") }
+        let moved = original.map { $0.quote != note.quote || $0.page != note.page } ?? false
+        if moved {
+            if let page = note.page, !(1...max(1, doc.pageCount)).contains(page) { throw Problem("请填写这篇 PDF 的实际页码，或留空以搜索全文。") }
+            note.region = nil; note.text_offset = nil; note.prefix = nil; note.suffix = nil
+        }
+        try library.edit(paperID) { p in
+            if let existing { p.notes[existing] = note } else { p.notes.append(note) }
+        }
+        let knownAnchor = moved ? nil : anchors[note.id]
+        removeHighlights(for: [note.id])
         refresh()
+        if let anchor = knownAnchor {
+            anchors[note.id] = drawHighlight(note, anchor: anchor, in: doc)
+        } else if note.isManual {
+            anchors[note.id] = drawHighlight(note, anchor: AnchorIndex(doc).find(note), in: doc)
+        } else if let updated = target {
+            locatePendingNotes(in: doc, paper: updated)
+        }
         viewer?.clearSelection()
         showNotes = true; filter = .all; selected = note.id; sheet = nil
-        notify("已保存手动批注")
+        notify("已保存批注")
     }
 
-    func deleteManualNote(_ note: Note, from paperID: String) throws {
-        guard current == paperID, note.isManual, let doc = document else { throw Problem("原文献已经关闭。") }
-        try library.edit(paperID) { $0.notes.removeAll { $0.id == note.id && $0.isManual } }
-        removeHighlight(note.id, in: doc); anchors.removeValue(forKey: note.id)
+    func deleteNote(_ note: Note, from paperID: String) throws {
+        guard current == paperID, target?.notes.contains(note) == true else {
+            throw Problem("文献或批注已更改，请关闭编辑窗口后重新打开。")
+        }
+        try removeNotes([note.id], from: paperID)
+        sheet = nil
+        notify("已删除批注")
+    }
+
+    func confirmClearAINotes(in paper: Paper) {
+        let count = paper.notes.filter { !$0.isManual }.count
+        guard count > 0, current == paper.id else { return }
+        let alert = NSAlert()
+        alert.messageText = "清除《\(paper.title)》的 AI 批注？"
+        alert.informativeText = "将移除本篇全部 \(count) 条 AI 批注和对应高光。手动批注会保留。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "清除 \(count) 条 AI 批注").hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        do { try clearAINotes(in: paper.id) } catch { self.error = error.localizedDescription }
+    }
+
+    func clearAINotes(in paperID: String) throws {
+        guard let paper = target, paper.id == paperID else { throw Problem("当前文献已更改，请重新选择。") }
+        let ids = Set(paper.notes.filter { !$0.isManual }.map(\.id))
+        guard !ids.isEmpty else { return }
+        try removeNotes(ids, from: paperID)
+        notify("已清除 \(ids.count) 条 AI 批注")
+    }
+
+    private func removeNotes(_ ids: Set<String>, from paperID: String) throws {
+        try library.edit(paperID) { $0.notes.removeAll { ids.contains($0.id) } }
+        removeHighlights(for: ids)
         refresh()
-        if selected == note.id { selected = nil }
-        sheet = nil; notify("已删除手动批注")
+        if let selected, ids.contains(selected) { self.selected = target?.notes.first?.id }
+        if case .existing(let id) = selectingRegion, ids.contains(id) { selectingRegion = nil }
+        if locating, let doc = document, let paper = target { locatePendingNotes(in: doc, paper: paper) }
     }
     func choosePDF() {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.pdf]; panel.allowsMultipleSelection = true
@@ -257,6 +323,7 @@ extension Kind {
         } catch { self.error = error.localizedDescription }
     }
     func focus(_ id: String, fromPDF: Bool = false) {
+        guard target?.notes.contains(where: { $0.id == id }) == true else { return }
         if selectingRegion != .existing(id) { selectingRegion = nil }
         selected = id; showNotes = true
         if fromPDF { filter = .all; return }
@@ -280,14 +347,14 @@ extension Kind {
             var draft = Note(manualQuote: "原版片段", page: pageNumber, offset: 0, prefix: "", suffix: "")
             draft.region = PageRegion(box); draft.text_offset = nil
             selectingRegion = nil
-            sheet = .manual(paperID: paper.id, note: draft, isNew: true)
+            sheet = .editor(paperID: paper.id, note: draft, isNew: true)
             return
         }
         guard case .existing(let id) = picking, var note = paper.notes.first(where: { $0.id == id }) else { return }
         note.page = pageNumber; note.region = PageRegion(box); note.text_offset = nil
         do {
             try library.merge([note], into: paper.id)
-            removeHighlight(id, in: doc)
+            removeHighlights(for: [id])
             anchors[id] = drawHighlight(note, anchor: .area(pageNumber, box), in: doc)
             selectingRegion = nil; filter = .all; selected = id; refresh()
             notify("已保存原版片段")

@@ -30,6 +30,11 @@ struct Note: Codable, Identifiable, Equatable {
     var text_offset: Int?
     var region: PageRegion?
     var isManual: Bool { source == "manual" }
+    var hasUnexpectedControlCharacters: Bool {
+        [quote, translation, note].contains { text in
+            text.unicodeScalars.contains { $0.value < 32 && ![9, 10, 13].contains($0.value) }
+        }
+    }
     var commentary: String { [translation, note].filter { !$0.isEmpty }.joined(separator: "\n\n") }
     enum CodingKeys: String, CodingKey { case id, page, kind, quote, translation, note, prefix, suffix, source, text_offset, region }
 
@@ -85,10 +90,7 @@ struct Envelope: Codable {
             let result = try decoder.decode(Envelope.self, from: payload)
             if let hash = result.document_sha256, let expectedHash, hash.lowercased() != expectedHash { throw Problem("这份批注的文献指纹与当前 PDF 不符。请打开生成批注时使用的原始 PDF。") }
             for row in result.annotations {
-                let hasBrokenEscape = [row.quote, row.translation, row.note].contains { text in
-                    text.unicodeScalars.contains { $0.value < 32 && ![9, 10, 13].contains($0.value) }
-                }
-                if hasBrokenEscape { throw Problem("批注「\(row.id)」含有异常控制字符。请检查公式，在 JSON 中把一个反斜杠写成两个。") }
+                if row.hasUnexpectedControlCharacters { throw Problem("批注「\(row.id)」含有异常控制字符。请检查公式，在 JSON 中把一个反斜杠写成两个。") }
             }
             guard Set(result.annotations.map(\.id)).count == result.annotations.count else { throw Problem("同一份 JSON 里出现了重复的批注 id。请为每条批注使用独立的 id。") }
             return result
