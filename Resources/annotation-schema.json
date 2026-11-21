@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "快读论文文献批注 v1",
+  "type": "object",
+  "required": ["schema_version", "annotations"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "document_sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$", "description": "原始 PDF 的 SHA-256；提供时必须匹配当前文献。" },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["quote", "translation", "note"],
+        "dependentRequired": {"region": ["page"]},
+        "if": { "required": ["source"], "properties": { "source": { "const": "manual" } } },
+        "else": { "properties": { "translation": { "pattern": "\\S" }, "note": { "pattern": "\\S" } } },
+        "properties": {
+          "source": { "type": "string", "description": "手动选区批注标为 manual，译文与注解可为空字符串。" },
+          "region": {
+            "type": "object", "required": ["x", "y", "width", "height"],
+            "description": "手动框选的原版区域，坐标为 PDF 页面原始点数；需要同时填写 page。",
+            "properties": { "x": {"type":"number"}, "y": {"type":"number"}, "width": {"type":"number","exclusiveMinimum":0}, "height": {"type":"number","exclusiveMinimum":0} }
+          },
+          "text_offset": { "type": "integer", "minimum": 0, "description": "引文在该页文本内的 UTF-16 起始偏移，从 0 开始。" },
+          "id": { "type": "string", "pattern": "\\S", "description": "文献内唯一，重复导入同一 id 将更新该条批注。" },
+          "page": { "type": "integer", "minimum": 1, "description": "从 1 开始的 PDF 物理页码。省略时在全文定位。" },
+          "kind": { "enum": ["claim", "method", "finding", "limitation"], "default": "claim" },
+          "quote": { "type": "string", "pattern": "\\S", "description": "一页内连续的原文。" },
+          "translation": { "type": "string", "description": "中文翻译。" },
+          "note": { "type": "string", "description": "对引文的解释或阅读注记。" },
+          "prefix": { "type": "string", "description": "引文紧邻的前文，用于消除歧义。" },
+          "suffix": { "type": "string", "description": "引文紧邻的后文，用于消除歧义。" }
+        }
+      }
+    }
+  }
+}

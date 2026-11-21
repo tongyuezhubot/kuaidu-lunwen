@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "document_sha256": "b00a6e0e818b4b2a958ad7844c50dc0a907bea81a00f959df385de0a6e6effc4",
+  "annotations": [
+    {
+      "id": "central-claim",
+      "page": 1,
+      "kind": "claim",
+      "quote": "A useful reading note connects a claim to the evidence that supports it.",
+      "translation": "一条有用的阅读笔记，会把论点与支持它的证据联系起来。",
+      "note": "这句话给出了筛选高光的标准。记下一个结论时，也要能回到论文中找到支撑它的比较、数据或推理。"
+    },
+    {
+      "id": "testable-comparison",
+      "page": 1,
+      "kind": "method",
+      "quote": "For each central claim, find the comparison that makes it testable.",
+      "translation": "针对每个核心论点，找出使它可以接受检验的那项比较。",
+      "note": "阅读实验结果时，可以先写出“谁与谁比较、比较什么”。这样再看图表，就更容易判断数据回答了哪个问题。"
+    },
+    {
+      "id": "boundary",
+      "page": 2,
+      "kind": "limitation",
+      "quote": "A difference observed in one setting need not hold in another.",
+      "translation": "在一种情境中观察到的差异，换一个情境未必仍然成立。",
+      "note": "把研究对象和测量条件一起记下来，有助于判断这个结论能否用于自己的研究。"
+    },
+    {
+      "id": "interpretation",
+      "page": 2,
+      "kind": "method",
+      "quote": "The quotation records what the authors wrote. The annotation explains why the passage matters to the reader and identifies any inference that goes beyond the source.",
+      "translation": "引文记录作者的原话。注解说明这段话对读者的意义，并标明哪些推断超出了原文。",
+      "note": "把引文、翻译和自己的解释分开，回顾笔记时才容易辨认一条判断的来源。"
+    }
+  ]
+}
